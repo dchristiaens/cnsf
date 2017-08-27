@@ -1,3 +1,2 @@
-import sh
-import io
+__all__ = ['io', 'sh', 'msmt']
 

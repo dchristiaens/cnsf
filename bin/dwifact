@@ -1,0 +1,127 @@
+#!/usr/bin/env python
+
+import numpy as np
+from scipy.ndimage.morphology import binary_erosion
+from dwichd.io import load_mrtrix
+from dwichd import msmt
+from dwichd.dirs import c300 as dirs
+import sys, time
+import argparse
+
+
+def cnsf(S, Z, H0, dirs, lmax=(8,0,0), rtol=5e-3, maxiters=50, printout=True):
+    H = H0[:,:,:max(lmax)//2+1]
+    residual = np.zeros((maxiters+1,))
+    t0 = time.time()
+    sol = None
+    F, residual[0] = msmt.csdsig(S, H, dirs, lmax)
+    for k in range(maxiters):
+        H, W, sol = msmt.estimatekernelconvex(S[...,:msmt._l2n(max(lmax))], Z[...,:max(lmax)//2+1], F, init=sol)
+        F, residual[k+1] = msmt.csdsig(S, H, dirs, lmax)
+        convergence = (abs(residual[k+1]-residual[k])/residual[k+1] < rtol)
+        if printout:
+            dt = int(time.time()-t0)+1
+            print('{:d} iterations completed in {:d}h {:d}m {:d}s.'.format(k+1, dt//3600, (dt%36000)//60, dt%60))
+            if convergence:
+                print('Convergence reached.')
+            sys.stdout.flush()
+        if convergence:
+            break
+    return {'H': H, 'F': F, 'res': residual[:k+2], 'r0': residual[k+1], 'W': W, 'time': time.time()-t0, 'lmax': lmax, 'state': convergence}
+
+
+if __name__ == '__main__':
+    # arguments
+    parser = argparse.ArgumentParser(description='CNSF factorization of DWI data.')
+    parser.add_argument('dwi', type=str, help='input DWI data.')
+    parser.add_argument('mask', type=str, help='input mask.')
+    parser.add_argument('out', type=str, help='output directory.')
+    parser.add_argument('-lmax', type=str, default='8,0,0', help='list of lmax per tissue.')
+    parser.add_argument('-nsub', type=int, default=1000, help='size of random voxel subset.')
+    parser.add_argument('-noscaling', dest='rescale', action='store_false', default=True)
+    parser.add_argument('-no_odfs', dest='full', action='store_false', default=True)
+    parser.add_argument('-no_plots', dest='plots', action='store_false', default=True)
+    args = parser.parse_args()
+    data_fn, mask_fn, out_dir = args.dwi, args.mask, args.out
+    llmax = tuple(map(int, args.lmax.split(',')))
+    nsub = args.nsub
+    # read data
+    img = load_mrtrix(data_fn)
+    img.grad[:,3] = np.round(img.grad[:,3], -2)
+    mask = load_mrtrix(mask_fn)
+    mask = (mask.data > 0.5)
+    bvals = np.unique(img.grad[:,3])
+    if args.rescale:
+        scale = np.sqrt( np.array([np.sum(img.grad[:,3]==b) for b in bvals], dtype=np.float)[:,np.newaxis] )
+        scale /= np.sum(scale)
+    else:
+        scale = np.ones((len(bvals), 1))
+    # fit SH
+    S = msmt.calcsig(img.data, img.grad, lmax=max(llmax)) * scale
+    #del(data)
+    # select random subset
+    idx = np.where(binary_erosion(mask, iterations=2).ravel())[0]
+    np.random.shuffle(idx)
+    idx = idx[:nsub]
+    Ssub = S.reshape((-1,)+S.shape[-2:])[idx]
+    # zonal harmonics fit
+    Zsub = msmt.bestfitzonal(Ssub, dirs)
+    # initialise kernels
+    H0 = msmt.initkernels(Zsub, lmax=llmax)
+    # run CNSF
+    result = cnsf(Ssub, Zsub, H0, dirs, llmax, rtol=5e-3)
+    H = msmt._project(result['H']/scale, llmax)
+    result['llmax'] = llmax
+    result['scale'] = scale
+    result['H0'] = H0
+    result['randidx'] = idx
+    # save result
+    np.savez(out_dir + '/result.npz', **result)
+    for k, h in enumerate(H):
+        np.savetxt(out_dir + '/K'+str(k+1)+'.txt', h)
+    # Compute full ODFs
+    if args.full:
+        print('Running MT-CSD with new-found RFs.')
+        t0 = time.time()
+        aux = {}
+        F, r = msmt.csdsig(S, result['H'], dirs, llmax, mask, aux)
+        dt = int(time.time()-t0)+1
+        print('Runtime: {:d}h {:d}m {:d}s.'.format(dt//3600, (dt%36000)//60, dt%60))
+        print('Residual: {:.4f}'.format(r))
+        # Save ODFs
+        out = img.empty_as(img)
+        for k in range(len(H)):
+            out.data = F[:,:,:,k]
+            out.save(out_dir + '/odf_t'+str(k+1)+'.mif')
+        out.data = F[:,:,:,:,0]*np.sqrt(4*np.pi)
+        out.save(out_dir + '/fiso.mif')
+        # Save predicted signal
+        for k, b in enumerate(bvals):
+            out.data = aux['S'][:,:,:,k,:]/scale[k]
+            out.save(out_dir + '/predsig_b' + str(int(b)) + '.mif')
+        out.data = aux['dS']*np.sqrt(4*np.pi)
+        out.save(out_dir + '/diffsig.mif')
+        #out.data = aux['dSrel']
+        #out.save(out_dir + '/rdiffsig.mif')
+        # Save weights
+        out.data = np.zeros(S.shape[:-2]+(len(H),))
+        out.data.reshape((-1,len(H)))[idx] = result['W'].T
+        out.save(out_dir + '/kernelweights.mif')
+    # quick plots
+    if args.plots:
+        import matplotlib.pyplot as plt
+        from dwichd.plotting import plot_wmr
+        plt.figure()
+        plt.plot(bvals, H[:,:,0].T/np.sqrt(4*np.pi), lw=1.5)
+        plt.xlabel('b-value')
+        plt.title('Kernels isotropic component')
+        plt.savefig(out_dir + '/rf_iso.pdf')
+        for k, h in enumerate(H):
+            plt.figure()
+            plot_wmr(h, bvals)
+            plt.title('Kernel ' + str(k+1))
+            plt.savefig(out_dir + '/rf_'+str(k+1)+'.pdf')
+
+
+
+
