@@ -10,6 +10,9 @@ from .sh import modshbasiscart
 from scipy.linalg import block_diag
 from cvxopt import matrix, spmatrix, solvers
 solvers.options['show_progress'] = False
+solvers.options['abstol'] = 1e-3
+solvers.options['reltol'] = 5e-3
+solvers.options['feastol'] = 1e-3
 from multiprocessing import Pool
 from scipy.spatial.distance import cdist
 import itertools
@@ -23,6 +26,18 @@ def _n2l(n):
 
 def _l2n(l):
     return (l+1)*(l+2)//2
+
+
+def zh2rh(h):
+    lmax = 2*(h.shape[-1]-1)
+    z2r = np.zeros((h.shape[-1], _l2n(lmax)))
+    for l in range(0, lmax+1, 2):
+        j1, j2 = _l2n(l-2), _l2n(l)
+        z2r[l//2,j1:j2] = np.sqrt(4*np.pi/(2*l+1))
+    return np.einsum('...i,ij->...j', h, z2r)
+
+def sphconv(h, f):
+    return np.einsum('ij,...j->...ij', zh2rh(h), f)
 
 
 def calcsig(dwi, grad, lmax=8):
@@ -87,20 +102,25 @@ class _ParallelQP(object):
         return np.ravel(solvers.qp(self.P, self.q[:,j], self.G, self.h)['x'])
 
 
-def cnsf(S, Z, H0, dirs, lmax=(8,0,0), maxiters=10, printout=True):
-    H = H0
+def cnsf(S, Z, H0, dirs, lmax=(8,0,0), rtol=5e-3, maxiters=50, printout=True):
+    H = H0[:,:,:max(lmax)//2+1]
     residual = np.zeros((maxiters+1,))
     t0 = time.time()
     sol = None
+    F, residual[0] = csdsig(S, H, dirs, lmax)
     for k in range(maxiters):
-        F, residual[k] = csdsig(S, H, dirs, lmax)
-        H, W, sol = estimatekernelconvex(S, Z, F, init=sol)
+        H, W, sol = estimatekernelconvex(S[...,:_l2n(max(lmax))], Z[...,:max(lmax)//2+1], F, init=sol)
+        F, residual[k+1] = csdsig(S, H, dirs, lmax)
+        convergence = (abs(residual[k+1]-residual[k])/residual[k+1] < rtol)
         if printout:
             dt = int(time.time()-t0)+1
-            print('{:d}/{:d} iterations completed in {:d}h {:d}m {:d}s.'.format(k+1, maxiters, dt//3600, (dt%36000)//60, dt%60))
+            print('{:d} iterations completed in {:d}h {:d}m {:d}s.'.format(k+1, dt//3600, (dt%36000)//60, dt%60))
+            if convergence:
+                print('Convergence reached.')
             sys.stdout.flush()
-    F, residual[maxiters] = csdsig(S, H, dirs, lmax)
-    return {'H': H, 'F': F, 'res': residual, 'r0': residual[-1], 'W': W, 'time': time.time()-t0, 'lmax': lmax}
+        if convergence:
+            break
+    return {'H': H, 'F': F, 'res': residual[:k+2], 'r0': residual[k+1], 'W': W, 'time': time.time()-t0, 'lmax': lmax, 'state': convergence}
 
 
 def bestfitzonal(sig, dirs):
@@ -123,6 +143,23 @@ def bestfitzonal(sig, dirs):
     else:               # 1-d and flattened arrays
         Z0 = Z[vox,:,:,idx].squeeze()
     return Z0
+
+
+def getzonal(sig):
+    '''
+    Calculate zonal harmonic from frequency content in each voxel.
+    '''
+    lmax = _n2l(sig.shape[-1])
+    Z = np.zeros(sig.shape[:-1]+(lmax//2+1,))
+    s = 1.
+    for l in range(0, lmax+1, 2):
+        j1, j2 = _l2n(l-2), _l2n(l)
+        Sl = np.einsum('...ij,...kj->...ik', sig[...,j1:j2], sig[...,j1:j2])
+        Ll, El = np.linalg.eigh(Sl)
+        z = np.sqrt(Ll[...,-1,np.newaxis]) * El[...,:,-1]
+        Z[...,:,l//2] = s * np.sign(np.sum(z, axis=-1)[...,np.newaxis]) * z
+        s *= -1.
+    return Z
 
 
 def estimatekernelconvex(sig, zonal, fod, init=None):   #, w0=None, tau=10.):
@@ -214,7 +251,7 @@ def _rconvmat(f, lmax, out=None):
     else:
         R = out
     for l in range(0,lmax+1,2):
-        j0, j1 = l*(l-1)//2, _l2n(l)
+        j0, j1 = _l2n(l-2), _l2n(l)
         R[j0:j1,l//2] = np.sqrt(4*np.pi/(2*l+1)) * f[j0:j1]
     return R
 
