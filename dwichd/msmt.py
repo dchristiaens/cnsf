@@ -80,6 +80,7 @@ def csdsig(sig, H, dirs, lmax=None, mask=None, aux=None):
     idx.reshape((-1,len(nco),max(nco)))[vox] = np.array([[True if j < nc else False for j in range(max(nco))] for nc in nco])
     pool = Pool()
     T = pool.map(_ParallelQP(KK, c, A, z0), vox.tolist())
+    pool.terminate()
     F[idx] = np.ravel(T)
     res = np.sum((sig.reshape((-1,m*n))[vox] - np.dot(T, K.T))**2)
     if aux is not None:
