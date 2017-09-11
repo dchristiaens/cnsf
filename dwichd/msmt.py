@@ -78,9 +78,8 @@ def csdsig(sig, H, dirs, lmax=None, mask=None, aux=None):
         vox = vox[mask.ravel()>0.5]
     idx = np.zeros(F.shape, dtype=np.bool)
     idx.reshape((-1,len(nco),max(nco)))[vox] = np.array([[True if j < nc else False for j in range(max(nco))] for nc in nco])
-    pool = Pool()
+    pool = _get_shared_pool()
     T = pool.map(_ParallelQP(KK, c, A, z0), vox.tolist())
-    pool.terminate()
     F[idx] = np.ravel(T)
     res = np.sum((sig.reshape((-1,m*n))[vox] - np.dot(T, K.T))**2)
     if aux is not None:
@@ -101,6 +100,14 @@ class _ParallelQP(object):
         self.h = h
     def __call__(self, j):
         return np.ravel(solvers.qp(self.P, self.q[:,j], self.G, self.h)['x'])
+
+
+_pool = None
+def _get_shared_pool():
+    global _pool
+    if _pool is None:
+        _pool = Pool()
+    return _pool
 
 
 def cnsf(S, Z, H0, dirs, lmax=(8,0,0), rtol=5e-3, maxiters=50, printout=True):
