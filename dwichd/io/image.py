@@ -185,7 +185,7 @@ class Image (object):
         Currently, only positive strides are supported due to numpy limitations.
         '''
         #return tuple(('-' if self.strides[s]<0 else '+') + str(s) for s in np.argsort(np.argsort(np.abs(self.strides))))
-        return tuple(str(s) for s in np.argsort(np.argsort(np.abs(self.strides))))
+        return tuple('+'+str(s) for s in np.argsort(np.argsort(np.abs(self.strides))))
 
 
     def _to_csv(self, a):
