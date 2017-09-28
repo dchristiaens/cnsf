@@ -1,2 +1,2 @@
-__all__ = ['io', 'sh', 'msmt']
+__all__ = ['io', 'sh', 'msmt', 'cgls']
 
