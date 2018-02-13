@@ -36,6 +36,7 @@ def zh2rh(h):
         z2r[l//2,j1:j2] = np.sqrt(4*np.pi/(2*l+1))
     return np.einsum('...i,ij->...j', h, z2r)
 
+
 def sphconv(h, f):
     return np.einsum('ij,...j->...ij', zh2rh(h), f)
 
