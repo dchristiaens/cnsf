@@ -1,5 +1,5 @@
 '''
-Cython module that implements the modified SH basis as defined in Descoteaux et al. (2006).
+Python module that implements the modified SH basis as defined in Descoteaux et al. (2006).
 
 Created on Jan 21, 2013
 
@@ -15,9 +15,9 @@ def c2s(x, y, z):
     Converts cartesian to spherical coordinates.
     '''
     r = np.hypot(x,y)
+    theta = np.arctan2(r,z)
+    phi = np.arctan2(y, x)
     np.hypot(r, z, out=r)
-    theta = np.arccos(z/r)
-    phi = np.pi + np.arctan2(-y, -x)
     return (theta, phi, r)
 
 
