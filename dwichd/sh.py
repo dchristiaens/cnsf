@@ -38,11 +38,19 @@ def n4l(L):
     return (L+1)*(L+2)//2
 
 
+def l2n(L):
+    return n4l(L)
+
+
 def l4n(R):
     '''
     Returns the order of the SH basis, given the number of coefficients.
     '''
-    return int(sqrt(1+8*R) - 3)//2
+    return int(np.sqrt(1+8*R) - 3)//2
+
+
+def n2l(R):
+    return l4n(R)
 
 
 def modshbasis(L, theta, phi):
